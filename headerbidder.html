@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Header Bidding Example</title>
+    <script async src="//www.googletagservices.com/tag/js/gpt.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/prebid.js/dist/prebid.js"></script>
+  </head>
+  <body>
+    <div id="ad-container"></div>
+    <script>
+      // prebid-config.js
+      const PREBID_TIMEOUT = 1000;
+      const FAILSAFE_TIMEOUT = 3000;
+
+      const adUnits = [
+        {
+          code: "ad-container",
+          mediaTypes: {
+            banner: {
+              sizes: [
+                [300, 250], // Mobile
+                [728, 90], // Desktop
+                [970, 250], // Desktop Large
+              ],
+            },
+          },
+          // Floor price by size and device
+          floors: {
+            currency: "USD",
+            schema: {
+              fields: ["mediaType", "size"],
+            },
+            values: {
+              "banner|300x250": 1.0,
+              "banner|728x90": 1.5,
+              "banner|970x250": 2.0,
+            },
+          },
+          bids: [
+            {
+              bidder: "appnexus",
+              params: {
+                placementId: "13144370",
+              },
+            },
+            {
+              bidder: "rubicon",
+              params: {
+                accountId: "14062",
+                siteId: "70608",
+                zoneId: "335918",
+              },
+            },
+          ],
+        },
+      ];
+
+      // Prebid initialization
+      pbjs.que.push(function () {
+        // Analytics configuration
+        pbjs.enableAnalytics({
+          provider: "ga",
+          options: {
+            sampling: 0.5,
+            enableDistribution: true,
+          },
+        });
+
+        // Bid validation middleware
+        pbjs.requestBids({
+          adUnits,
+          timeout: PREBID_TIMEOUT,
+          bidsBackHandler: function (bids) {
+            console.log("Bids received:", pbjs.getBidResponses());
+            validateAndProcessBids(bids);
+          },
+        });
+      });
+
+      // Bid validation and processing
+      function validateAndProcessBids(bids) {
+        const validBids = Object.keys(bids)
+          .map((adUnitCode) => {
+            const adUnitBids = bids[adUnitCode].bids;
+            return adUnitBids.filter((bid) => {
+              return validateBid(bid);
+            });
+          })
+          .flat();
+
+        if (validBids.length > 0) {
+          const winner = selectWinningBid(validBids);
+          renderAd(winner);
+        } else {
+          loadFallbackAd();
+        }
+      }
+
+      // OpenRTB bid validation
+      function validateBid(bid) {
+        const requiredFields = ["price", "adomain", "creative"];
+        const isValid = requiredFields.every((field) => bid[field]);
+
+        if (!isValid) {
+          logError("Invalid bid structure", bid);
+          return false;
+        }
+
+        if (bid.price < getFloorPrice(bid)) {
+          logError("Bid below floor price", bid);
+          return false;
+        }
+
+        return true;
+      }
+
+      // Lazy loading implementation
+      const lazyLoadAds = () => {
+        const adElements = document.querySelectorAll(".ad-container");
+
+        const observer = new IntersectionObserver((entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              const adUnit = entry.target;
+              pbjs.requestBids({
+                adUnits: [getAdUnitConfig(adUnit.id)],
+                timeout: PREBID_TIMEOUT,
+                bidsBackHandler: (bids) => {
+                  validateAndProcessBids(bids);
+                },
+              });
+              observer.unobserve(adUnit);
+            }
+          });
+        });
+
+        adElements.forEach((adElement) => {
+          observer.observe(adElement);
+        });
+      };
+
+      // Error handling and logging
+      function logError(message, data) {
+        console.error(`Header Bidding Error: ${message}`, data);
+        // Send to analytics
+        if (typeof ga !== "undefined") {
+          ga("send", "event", "HeaderBidding", "Error", message);
+        }
+      }
+
+      // Fallback ad implementation
+      function loadFallbackAd() {
+        const fallbackAd = {
+          code: "house-ad",
+          mediaTypes: {
+            banner: {
+              sizes: [[300, 250]],
+            },
+          },
+          // House ad configuration
+          bids: [
+            {
+              bidder: "direct",
+              params: {
+                placementId: "house-inventory",
+              },
+            },
+          ],
+        };
+
+        pbjs.requestBids({
+          adUnits: [fallbackAd],
+          timeout: FAILSAFE_TIMEOUT,
+          bidsBackHandler: function (bids) {
+            renderAd(bids[fallbackAd.code]);
+          },
+        });
+      }
+
+      // Initialize when DOM is ready
+      document.addEventListener("DOMContentLoaded", () => {
+        lazyLoadAds();
+      });
+    </script>
+  </body>
+</html>
